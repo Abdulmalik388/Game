@@ -1,0 +1,467 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Advanced Car Racing Game</title>
+  <style>
+    :root{
+      --bg:#0b0b0e;
+      --panel:#0f1720;
+      --accent:#1e90ff;
+      --muted:#9aa4b2;
+    }
+    html,body{height:100%;margin:0;background:linear-gradient(180deg,#07111a,#020305);color:#fff;font-family:Inter,system-ui,Arial,sans-serif;display:flex;align-items:center;justify-content:center}
+    .wrap{width:420px;padding:16px;border-radius:12px;background:linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01));box-shadow:0 12px 40px rgba(2,6,23,.7)}
+    header{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px}
+    h1{font-size:16px;margin:0;color:#e6eef8}
+    .hud{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .hud .card{background:var(--panel);padding:8px 10px;border-radius:10px;font-size:13px;color:var(--muted);min-width:84px;text-align:center;box-shadow:inset 0 -2px 0 rgba(255,255,255,0.02)}
+    .hud .card strong{display:block;color:#fff;font-size:14px}
+    #game{display:block;border-radius:10px;background:linear-gradient(#26343f,#0d1215);box-shadow:0 8px 30px rgba(0,0,0,.6);width:400px;height:600px}
+    .controls{display:flex;gap:8px;margin-top:8px;align-items:center}
+    button{padding:8px 12px;border-radius:8px;border:none;background:var(--accent);color:#fff;cursor:pointer;font-weight:600}
+    .small{font-size:12px;color:var(--muted)}
+    .lives{display:flex;gap:6px;justify-content:center}
+    .heart{width:14px;height:14px;border-radius:3px;background:#ff6b6b;box-shadow:0 1px 0 rgba(0,0,0,.4)}
+    .heart.empty{opacity:.2;background:#3b3f47}
+    .center-note{margin-top:8px;text-align:center;color:var(--muted);font-size:12px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Advanced Car Racing — Collab Build</h1>
+      <div class="hud">
+        <div class="card">Score<br><strong id="score">0</strong></div>
+        <div class="card">Speed<br><strong id="speed">1.0x</strong></div>
+        <div class="card">Multiplier<br><strong id="multi">x1</strong></div>
+        <div class="card">Lives<br>
+          <div class="lives" id="lives">
+            <div class="heart"></div><div class="heart"></div><div class="heart"></div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <canvas id="game" width="400" height="600"></canvas>
+
+    <div class="controls" style="margin-top:8px">
+      <button id="restart">Restart</button>
+      <div class="small">Use ← → or A/D. Tap left/right on mobile.</div>
+    </div>
+    <div class="center-note">Power-ups (blue) give a temporary speed boost. Avoid obstacles to build a streak!</div>
+  </div>
+
+  <script>
+    // Canvas + DOM
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const scoreEl = document.getElementById('score');
+    const speedEl = document.getElementById('speed');
+    const multiEl = document.getElementById('multi');
+    const restartBtn = document.getElementById('restart');
+    const livesEl = document.getElementById('lives');
+
+    const W = canvas.width, H = canvas.height;
+
+    // Player car
+    const car = {
+      w: 48,
+      h: 80,
+      x: W/2 - 24,
+      y: H - 120,
+      baseSpeed: 6,
+      speed: 6,
+      color: '#ff4f4f',
+      invulnerable: false,
+      invulnTimer: 0
+    };
+
+    // World state
+    let keys = {left:false,right:false};
+    let obstacles = [];
+    let powerups = [];
+    let laneLines = [];
+    let frames = 0;
+    let score = 0;
+    let lives = 3;
+    let gameOver = false;
+    let speedMultiplier = 1;
+    let streak = 0;
+    let multiplier = 1;
+    let explosionEffects = [];
+
+    // Config
+    const LANE_PADDING = 40;
+    const ROAD_LEFT = 40;
+    const ROAD_RIGHT = W - 40;
+    const MAX_LIVES = 3;
+
+    // init lane lines for visual motion
+    function initLaneLines(){
+      laneLines = [];
+      const spacing = 50;
+      for(let i=0;i<Math.ceil(H/spacing)+4;i++){
+        laneLines.push({x: W/2 - 4, y: i * spacing - 200, h: 30});
+      }
+    }
+
+    // reset game
+    function reset(){
+      car.x = W/2 - car.w/2;
+      car.speed = car.baseSpeed;
+      car.invulnerable = false;
+      car.invulnTimer = 0;
+      obstacles = [];
+      powerups = [];
+      frames = 0;
+      score = 0;
+      lives = MAX_LIVES;
+      gameOver = false;
+      speedMultiplier = 1;
+      streak = 0;
+      multiplier = 1;
+      explosionEffects = [];
+      scoreEl.textContent = '0';
+      speedEl.textContent = speedMultiplier.toFixed(1) + 'x';
+      multiEl.textContent = 'x1';
+      updateLivesUI();
+      initLaneLines();
+    }
+
+    restartBtn.addEventListener('click', reset);
+
+    // Input
+    window.addEventListener('keydown', e=>{
+      if(e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keys.left = true;
+      if(e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.right = true;
+      if(e.key === ' ' && gameOver) reset();
+    });
+    window.addEventListener('keyup', e=>{
+      if(e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keys.left = false;
+      if(e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.right = false;
+    });
+
+    // Touch simple control
+    canvas.addEventListener('touchstart', e=>{
+      const t = e.touches[0];
+      const rect = canvas.getBoundingClientRect();
+      const x = t.clientX - rect.left;
+      keys.left = x < W/2;
+      keys.right = x > W/2;
+    }, {passive:true});
+    canvas.addEventListener('touchend', e => { keys.left=false; keys.right=false; });
+
+    // Spawn obstacle types: truck (wide slow), car (medium), block (small fast)
+    function spawnObstacle(){
+      const types = [
+        {type:'truck', w: 120, h:36, baseSpeed:1.4, color:'#7b5e57'},
+        {type:'car', w: 70, h:30, baseSpeed:2.2, color:'#9cc5ff'},
+        {type:'block', w: 46, h:28, baseSpeed:3.5, color:'#ffd166'}
+      ];
+      // bias spawn probabilities
+      const r = Math.random();
+      let spec;
+      if(r < 0.15) spec = types[0];
+      else if(r < 0.72) spec = types[1];
+      else spec = types[2];
+
+      const w = spec.w;
+      const x = Math.floor(Math.random() * (ROAD_RIGHT - ROAD_LEFT - w)) + ROAD_LEFT;
+      const ob = {
+        x, y: -80, w: spec.w, h: spec.h,
+        baseSpeed: spec.baseSpeed,
+        speed: spec.baseSpeed,
+        color: spec.color,
+        type: spec.type,
+        passed: false
+      };
+      obstacles.push(ob);
+    }
+
+    // Spawn power-up: speed boost
+    function spawnPowerup(){
+      const x = Math.floor(Math.random() * (ROAD_RIGHT - ROAD_LEFT - 28)) + ROAD_LEFT;
+      powerups.push({x, y:-60, w:28, h:28, type:'boost', color:'#3ec5ff', active:false});
+    }
+
+    // Explosion / flash on hit
+    function spawnExplosion(x,y){
+      explosionEffects.push({x,y,r:6,alpha:1,life:0});
+    }
+
+    // Update lives UI
+    function updateLivesUI(){
+      livesEl.innerHTML = '';
+      for(let i=0;i<MAX_LIVES;i++){
+        const div = document.createElement('div');
+        div.className = 'heart' + (i >= lives ? ' empty' : '');
+        livesEl.appendChild(div);
+      }
+    }
+
+    // Update loop
+    function update(){
+      if(gameOver) return;
+      frames++;
+
+      // increase difficulty over time
+      if(frames % 400 === 0) speedMultiplier += 0.15;
+      speedEl.textContent = speedMultiplier.toFixed(1) + 'x';
+
+      // adjust spawn rates by speed
+      if(frames % Math.max(25, Math.floor(90 - speedMultiplier * 12)) === 0) spawnObstacle();
+      if(frames % 900 === 0) spawnPowerup();
+
+      // update lane lines (visual)
+      for(let line of laneLines){
+        line.y += 5 * speedMultiplier;
+        if(line.y > H + 40) line.y = -60;
+      }
+
+      // player movement
+      const effectiveSpeed = car.baseSpeed * speedMultiplier;
+      if(keys.left) car.x -= effectiveSpeed;
+      if(keys.right) car.x += effectiveSpeed;
+      // clamp car
+      if(car.x < ROAD_LEFT) car.x = ROAD_LEFT;
+      if(car.x + car.w > ROAD_RIGHT) car.x = ROAD_RIGHT - car.w;
+
+      // powerups move
+      for(let pu of powerups){
+        pu.y += 2.2 * speedMultiplier;
+      }
+
+      // obstacles move
+      for(let ob of obstacles){
+        ob.y += ob.speed * speedMultiplier * 1.2;
+        // slight horizontal sway for large vehicles
+        if(ob.type === 'truck') ob.x += Math.sin((frames+ob.x)/90) * 0.4;
+      }
+
+      // collisions & offscreen handling
+      // powerups: pickup
+      powerups = powerups.filter(pu => {
+        // pickup?
+        if(rectsIntersect(pu, car)){
+          activatePowerup(pu);
+          return false;
+        }
+        if(pu.y > H + 80) return false;
+        return true;
+      });
+
+      // obstacles filter: check offscreen -> award score & streak
+      obstacles = obstacles.filter(ob => {
+        if(ob.y > H + 80){
+          // obstacle left the screen without colliding
+          score += 10 * multiplier;
+          streak++;
+          // increase multiplier every 5 in streak
+          if(streak > 0 && streak % 5 === 0) {
+            multiplier = Math.min(5, multiplier + 1);
+            multiEl.textContent = 'x' + multiplier;
+          }
+          scoreEl.textContent = score;
+          return false;
+        }
+        return true;
+      });
+
+      // collision detection
+      for(let ob of obstacles){
+        if(car.invulnerable) break;
+        if(rectsIntersect(ob, car)){
+          // hit
+          spawnExplosion(car.x + car.w/2, car.y + car.h/2);
+          lives -= 1;
+          updateLivesUI();
+          car.invulnerable = true;
+          car.invulnTimer = 0;
+          streak = 0;
+          multiplier = 1;
+          multiEl.textContent = 'x1';
+          // a little knockback
+          car.x -= 20;
+          if(car.x < ROAD_LEFT) car.x = ROAD_LEFT;
+          if(lives <= 0){
+            gameOver = true;
+            // final explosion
+            spawnExplosion(car.x + car.w/2, car.y + car.h/2);
+          }
+          break;
+        }
+      }
+
+      // invulnerability timer handling (short)
+      if(car.invulnerable){
+        car.invulnTimer++;
+        if(car.invulnTimer > 120){ // ~2 seconds
+          car.invulnerable = false;
+          car.invulnTimer = 0;
+        }
+      }
+
+      // update explosion effects
+      explosionEffects = explosionEffects.filter(e=>{
+        e.life += 1;
+        e.r += 2.4;
+        e.alpha -= 0.04;
+        return e.alpha > 0.02;
+      });
+
+    }
+
+    // Activate powerup effect
+    function activatePowerup(pu){
+      if(pu.type === 'boost'){
+        // temporary speed surge
+        const original = speedMultiplier;
+        speedMultiplier += 0.9; // boost amount
+        // cap
+        if(speedMultiplier > 4.5) speedMultiplier = 4.5;
+        speedEl.textContent = speedMultiplier.toFixed(1) + 'x';
+        // short-lived, revert after time
+        setTimeout(()=> {
+          // only reduce if still above base (prevent wiping future boosts)
+          speedMultiplier = Math.max(1, speedMultiplier - 0.9);
+          speedEl.textContent = speedMultiplier.toFixed(1) + 'x';
+        }, 4500);
+        // slight score for pickup
+        score += 25;
+        scoreEl.textContent = score;
+      }
+    }
+
+    // simple AABB intersect
+    function rectsIntersect(a,b){
+      return !(a.x + a.w < b.x || a.x > b.x + b.w || a.y + (a.h||0) < b.y || a.y > b.y + b.h);
+    }
+
+   // draw everything
+function draw(){
+  // background
+  ctx.clearRect(0,0,W,H);
+  // draw roadside
+  ctx.fillStyle = '#071018';
+  ctx.fillRect(0,0,W,H);
+
+  // road
+  const roadGrad = ctx.createLinearGradient(0,0,0,H);
+  roadGrad.addColorStop(0,'#1c2a33');
+  roadGrad.addColorStop(1,'#091014');
+  ctx.fillStyle = roadGrad;
+  ctx.fillRect(ROAD_LEFT-8, 0, ROAD_RIGHT - ROAD_LEFT + 16, H);
+
+  // road edges
+  ctx.fillStyle = '#0b1620';
+  ctx.fillRect(ROAD_LEFT-8, 0, 8, H);
+  ctx.fillRect(ROAD_RIGHT, 0, 8, H);
+
+  // lane dashed center
+  ctx.fillStyle = '#dfe9ef';
+  for(let line of laneLines){
+    ctx.fillRect(line.x - 3, line.y, 6, line.h);
+  }
+
+  // draw powerups
+  for(let pu of powerups){
+    ctx.save();
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = pu.color;
+    roundRect(ctx, pu.x, pu.y, pu.w, pu.h, 6, true, false);
+    ctx.fillStyle = '#fff';
+    ctx.font = '14px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('+', pu.x + pu.w/2, pu.y + pu.h/2 + 1);
+    ctx.restore();
+  }
+
+  // draw obstacles
+  for(let ob of obstacles){
+    ctx.save();
+    ctx.fillStyle = ob.color;
+    roundRect(ctx, ob.x, ob.y, ob.w, ob.h, 6, true, false);
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fillRect(ob.x + 6, ob.y + 4, ob.w - 12, ob.h - 8);
+    ctx.restore();
+  }
+
+  // draw car
+  ctx.save();
+  if(car.invulnerable && Math.floor(car.invulnTimer / 8) % 2 === 0) ctx.globalAlpha = 0.35;
+  ctx.fillStyle = car.color;
+  roundRect(ctx, car.x, car.y, car.w, car.h, 8, true, false);
+  ctx.fillStyle = 'rgba(255,255,255,0.12)';
+  roundRect(ctx, car.x + 8, car.y + 8, car.w - 16, 22, 4, true, false);
+  ctx.restore();
+
+  // explosions
+  for(let e of explosionEffects){
+    ctx.save();
+    ctx.beginPath();
+    ctx.fillStyle = `rgba(255,200,80,${e.alpha})`;
+    ctx.arc(e.x, e.y, e.r, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // --- GAME OVER overlay ---
+  if(gameOver){
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(0,0,W,H);
+
+    ctx.fillStyle = '#fff';
+    ctx.font = '34px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('Game Over', W/2, H/2 - 40);
+
+    // show final score
+    ctx.font = '22px Arial';
+    ctx.fillText('Final Score: ' + score, W/2, H/2);
+
+    ctx.font = '16px Arial';
+    ctx.fillText('Press Restart to play again', W/2, H/2 + 40);
+    ctx.restore();
+  }
+}
+
+
+    // helper: rounded rect
+    function roundRect(ctx,x,y,w,h,r,fill,stroke){
+      if (typeof stroke === 'undefined') stroke = true;
+      if (typeof r === 'undefined') r = 5;
+      if (typeof r === 'number') r = {tl: r, tr: r, br: r, bl: r};
+      ctx.beginPath();
+      ctx.moveTo(x + r.tl, y);
+      ctx.lineTo(x + w - r.tr, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + r.tr);
+      ctx.lineTo(x + w, y + h - r.br);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - r.br, y + h);
+      ctx.lineTo(x + r.bl, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - r.bl);
+      ctx.lineTo(x, y + r.tl);
+      ctx.quadraticCurveTo(x, y, x + r.tl, y);
+      ctx.closePath();
+      if (fill) ctx.fill();
+      if (stroke) ctx.stroke();
+    }
+
+    // main loop
+    function loop(){
+      update();
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    // initial setup
+    initLaneLines();
+    reset();
+    loop();
+
+  </script>
+</body>
+</html>
